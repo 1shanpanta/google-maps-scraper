@@ -178,7 +178,7 @@ func (w *webrunner) scrapeJob(ctx context.Context, job *web.Job) error {
 	exitMonitor := exiter.New()
 
 	seedJobs, err := runner.CreateSeedJobs(
-		job.Data.FastMode,
+		job.Data.FastMode || w.cfg.FastMode,
 		job.Data.Lang,
 		strings.NewReader(strings.Join(job.Data.Keywords, "\n")),
 		job.Data.Depth,
@@ -255,7 +255,8 @@ func (w *webrunner) setupMate(_ context.Context, writer io.Writer, job *web.Job)
 		scrapemateapp.WithExitOnInactivity(time.Minute * 3),
 	}
 
-	if !job.Data.FastMode {
+	useFastMode := job.Data.FastMode || w.cfg.FastMode
+	if !useFastMode {
 		opts = append(opts,
 			scrapemateapp.WithJS(scrapemateapp.DisableImages()),
 		)
