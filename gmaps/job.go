@@ -194,10 +194,8 @@ func (j *GmapJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPag
 
 	clickRejectCookiesIfRequired(page)
 
-	const defaultTimeout = 5 * time.Second
-
-	// Ignore WaitForURL errors — Google Maps may redirect slowly especially via proxy
-	_ = page.WaitForURL(page.URL(), defaultTimeout)
+	// Brief settle wait — URL is already current, so this resolves near-instantly
+	_ = page.WaitForURL(page.URL(), 1*time.Second)
 
 	resp.URL = pageResponse.URL
 	resp.StatusCode = pageResponse.StatusCode
@@ -207,12 +205,12 @@ func (j *GmapJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPag
 	// check element scroll
 	sel := `div[role='feed']`
 
-	err = page.WaitForSelector(sel, 10*time.Second)
+	err = page.WaitForSelector(sel, 5*time.Second)
 
 	var singlePlace bool
 
 	if err != nil {
-		waitCtx, waitCancel := context.WithTimeout(ctx, time.Second*5)
+		waitCtx, waitCancel := context.WithTimeout(ctx, time.Second*3)
 		defer waitCancel()
 
 		singlePlace = waitUntilURLContains(waitCtx, page, "/maps/place/")
@@ -315,12 +313,12 @@ func scroll(ctx context.Context,
 
 	var currentScrollHeight int
 	// Scroll to the bottom of the page.
-	waitTime := 100.
+	waitTime := 50.
 	cnt := 0
 
 	const (
-		timeout  = 500
-		maxWait2 = 2000
+		timeout  = 300
+		maxWait2 = 800
 	)
 
 	for i := 0; i < maxDepth; i++ {
@@ -360,10 +358,10 @@ func scroll(ctx context.Context,
 		default:
 		}
 
-		waitTime *= 1.5
+		waitTime *= 1.3
 
-		if waitTime > maxWait2 {
-			waitTime = maxWait2
+		if waitTime > 500 {
+			waitTime = 500
 		}
 
 		page.WaitForTimeout(time.Duration(waitTime) * time.Millisecond)

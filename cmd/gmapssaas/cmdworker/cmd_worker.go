@@ -65,7 +65,7 @@ var Command = &cli.Command{
 		&cli.Int64Flag{
 			Name:    "max-jobs-per-cycle",
 			Usage:   "Maximum jobs before restarting scraper",
-			Value:   100,
+			Value:   5,
 			Sources: cli.EnvVars(saas.EnvMaxJobsPerCycle),
 		},
 		&cli.StringFlag{
@@ -90,7 +90,7 @@ var Command = &cli.Command{
 		}()
 
 		configuredConcurrency := max(1, cmd.Int("concurrency"))
-		concurrency := 1
+		concurrency := min(configuredConcurrency, 3)
 
 		// Initialize stats
 		workerStats.startedAt = time.Now()

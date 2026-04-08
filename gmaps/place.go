@@ -155,10 +155,8 @@ func (j *PlaceJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPa
 
 	clickRejectCookiesIfRequired(page)
 
-	const defaultTimeout = 5 * time.Second
-
-	// Ignore WaitForURL errors — Google Maps may redirect slowly especially via proxy
-	_ = page.WaitForURL(page.URL(), defaultTimeout)
+	// Brief settle wait — URL is already current, so this resolves near-instantly
+	_ = page.WaitForURL(page.URL(), 1*time.Second)
 
 	resp.URL = pageResponse.URL
 	resp.StatusCode = pageResponse.StatusCode
@@ -212,21 +210,21 @@ func (j *PlaceJob) getRaw(ctx context.Context, page scrapemate.BrowserPage) (any
 			raw, err := page.Eval(js)
 			if err != nil {
 				// Continue retrying on error
-				<-time.After(time.Millisecond * 200)
+				<-time.After(time.Millisecond * 100)
 				continue
 			}
 
 			// Check for valid non-null result
 			// go-rod may return nil for JS null, or empty string
 			if raw == nil {
-				<-time.After(time.Millisecond * 200)
+				<-time.After(time.Millisecond * 100)
 				continue
 			}
 
 			// If it's a string, make sure it's not empty
 			if str, ok := raw.(string); ok {
 				if str == "" {
-					<-time.After(time.Millisecond * 200)
+					<-time.After(time.Millisecond * 100)
 					continue
 				}
 			}
@@ -240,7 +238,7 @@ func (j *PlaceJob) extractJSON(page scrapemate.BrowserPage) ([]byte, error) {
 	const maxRetries = 2
 
 	for attempt := range maxRetries {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		rawI, err := j.getRaw(ctx, page)
 
 		cancel()

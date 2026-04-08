@@ -19,6 +19,8 @@ type FlushResult struct {
 	Err         error
 }
 
+const flushBatchSize = 50
+
 type trackedJob struct {
 	jobID      string
 	entries    []*gmaps.Entry
@@ -26,6 +28,7 @@ type trackedJob struct {
 	riverJobID int64
 	keyword    string
 	startedAt  time.Time
+	totalSaved int
 }
 
 // SaveFunc persists results. The default writes to PostgreSQL;
@@ -75,6 +78,8 @@ func (cw *CentralWriter) RegisterJob(jobID string, riverJobID int64, keyword str
 }
 
 // AddResult appends an entry for the currently tracked job.
+// When the in-memory buffer hits flushBatchSize, a batch is saved to DB
+// and the buffer is cleared to keep memory bounded.
 func (cw *CentralWriter) AddResult(jobID string, entry *gmaps.Entry) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
@@ -84,6 +89,44 @@ func (cw *CentralWriter) AddResult(jobID string, entry *gmaps.Entry) {
 	}
 
 	cw.current.entries = append(cw.current.entries, entry)
+
+	if len(cw.current.entries) >= flushBatchSize {
+		cw.saveBatchLocked()
+	}
+}
+
+// saveBatchLocked persists the current in-memory entries to DB and clears
+// the buffer. Must be called while cw.mu is held.
+func (cw *CentralWriter) saveBatchLocked() {
+	j := cw.current
+	if j == nil || len(j.entries) == 0 {
+		return
+	}
+
+	for _, entry := range j.entries {
+		jsonbsanitize.StripNULFromEntry(entry)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	err := cw.save(ctx, j.riverJobID, j.keyword, j.entries)
+	cancel()
+
+	if err != nil {
+		log.Error("failed to save batch",
+			"job_id", j.jobID,
+			"river_job_id", j.riverJobID,
+			"batch_size", len(j.entries),
+			"error", err,
+		)
+		return
+	}
+
+	j.totalSaved += len(j.entries)
+	j.entries = j.entries[:0]
+
+	if cw.OnResultsSaved != nil {
+		cw.OnResultsSaved(j.totalSaved)
+	}
 }
 
 // MarkDone is called by the exit monitor when a job is complete.
@@ -123,7 +166,7 @@ func (cw *CentralWriter) FlushQueueDepth() int {
 	return 0
 }
 
-// Flush saves results to DB, signals completion, and clears tracked state.
+// Flush saves any remaining results to DB, signals completion, and clears tracked state.
 // Idempotent: a second call for the same jobID is a no-op.
 func (cw *CentralWriter) Flush(jobID string) {
 	cw.mu.Lock()
@@ -137,31 +180,39 @@ func (cw *CentralWriter) Flush(jobID string) {
 	cw.current = nil
 	cw.mu.Unlock()
 
-	for _, entry := range j.entries {
-		jsonbsanitize.StripNULFromEntry(entry)
+	var err error
+
+	// Save any remaining entries not yet flushed by batch saves
+	if len(j.entries) > 0 {
+		for _, entry := range j.entries {
+			jsonbsanitize.StripNULFromEntry(entry)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = cw.save(ctx, j.riverJobID, j.keyword, j.entries)
+		cancel()
+
+		if err != nil {
+			log.Error("failed to save results",
+				"job_id", j.jobID,
+				"river_job_id", j.riverJobID,
+				"error", err,
+			)
+		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err := cw.save(ctx, j.riverJobID, j.keyword, j.entries)
+	totalCount := j.totalSaved + len(j.entries)
 
-	cancel()
-
-	if err != nil {
-		log.Error("failed to save results",
-			"job_id", j.jobID,
-			"river_job_id", j.riverJobID,
-			"error", err,
-		)
-	} else if cw.OnResultsSaved != nil && len(j.entries) > 0 {
-		cw.OnResultsSaved(len(j.entries))
+	if err == nil && cw.OnResultsSaved != nil && totalCount > 0 {
+		cw.OnResultsSaved(totalCount)
 	}
 
-	j.completion <- FlushResult{ResultCount: len(j.entries), Err: err}
+	j.completion <- FlushResult{ResultCount: totalCount, Err: err}
 
 	log.Debug("flushed scrape job",
 		"job_id", j.jobID,
 		"river_job_id", j.riverJobID,
-		"result_count", len(j.entries),
+		"result_count", totalCount,
 		"duration_ms", time.Since(j.startedAt).Milliseconds(),
 		"save_error", err,
 	)
@@ -234,6 +285,8 @@ func (cw *CentralWriter) markCompletedFromResult(result scrapemate.Result, count
 }
 
 // pgSave returns a SaveFunc that writes to the scrape_results table.
+// On conflict it appends the new batch to existing results instead of replacing,
+// so batch-flushed entries accumulate correctly.
 func pgSave(db *pgxpool.Pool) SaveFunc {
 	return func(ctx context.Context, riverJobID int64, keyword string, entries []*gmaps.Entry) error {
 		resultsJSON, err := json.Marshal(entries)
@@ -242,10 +295,10 @@ func pgSave(db *pgxpool.Pool) SaveFunc {
 		}
 
 		q := `INSERT INTO scrape_results (job_id, keyword, results, result_count)
-			VALUES ($1, $2, $3, $4)
+			VALUES ($1, $2, $3::jsonb, $4)
 			ON CONFLICT (job_id) DO UPDATE SET
-				results = $3,
-				result_count = $4`
+				results = scrape_results.results || $3::jsonb,
+				result_count = scrape_results.result_count + $4`
 
 		_, err = db.Exec(ctx, q, riverJobID, keyword, resultsJSON, len(entries))
 

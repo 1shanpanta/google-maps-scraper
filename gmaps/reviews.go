@@ -76,7 +76,7 @@ func (f *fetcher) fetch(ctx context.Context) (FetchReviewsResponse, error) {
 
 	nextPageToken := extractNextPageToken(currentPageBody)
 
-	for nextPageToken != "" {
+	for nextPageToken != "" && len(ans.pages) < 10 {
 		reviewURL, err = f.generateURL(f.params.mapURL, nextPageToken, 20, requestIDForSession)
 		if err != nil {
 			log.Printf("Error generating URL for token %s: %v", nextPageToken, err)
@@ -145,7 +145,7 @@ func (f *fetcher) fetchWithBrowser(_ context.Context, initialURL, requestID stri
 
 	// Get additional pages
 	nextPageToken := extractNextPageToken([]byte(data))
-	for nextPageToken != "" && len(ans.pages) < 50 { // Limit to 50 pages
+	for nextPageToken != "" && len(ans.pages) < 10 { // Limit to 10 pages (200 reviews)
 		nextURL, err := f.generateURL(f.params.mapURL, nextPageToken, 20, requestID)
 		if err != nil {
 			break
@@ -409,11 +409,11 @@ func extractReviewsFromPage(ctx context.Context, page scrapemate.BrowserPage) ([
 	}
 
 	// Wait for reviews panel to load
-	time.Sleep(3 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	var reviews []DOMReview
 
-	maxScrollAttempts := 30
+	maxScrollAttempts := 10
 	lastCount := 0
 	stuckCount := 0
 
@@ -716,7 +716,7 @@ func extractReviewsFromPage(ctx context.Context, page scrapemate.BrowserPage) ([
 			}
 		}`)
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 	}
 
 	log.Printf("DOM extraction completed: %d reviews found", len(reviews))

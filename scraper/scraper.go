@@ -164,7 +164,7 @@ func (m *ScraperManager) Run(ctx context.Context) error {
 }
 
 func (m *ScraperManager) runCycle(ctx context.Context) error {
-	provider := NewProvider(m.concurrency * 64)
+	provider := NewProvider(m.concurrency * 16)
 
 	// Update references atomically
 	m.mu.Lock()
